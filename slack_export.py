@@ -242,19 +242,43 @@ def doTestAuth():
 # Since Slacker does not Cache.. populate some reused lists
 def bootstrapKeyValues():
     global users, channels, groups, dms
-    users = slack.users_list()['members']
+    data = slack.users_list()
+    users.extend(data['members'])
+    while data['response_metadata']['next_cursor']:
+        data = slack.users_list(cursor = data['response_metadata']['next_cursor'])
+        users.extend(data['members'])
+        sleep(1)
+    
     print(u"Found {0} Users".format(len(users)))
     sleep(1)
     
-    channels = slack.conversations_list(types="public_channel")['channels']
+    data = slack.conversations_list(types="public_channel")
+    channels.extend(data['channels'])
+    while data['response_metadata']['next_cursor']:
+        data = slack.conversations_list(types="public_channel", cursor = data['response_metadata']['next_cursor'])
+        channels.extend(data['channels'])
+        sleep(1)
+
     print(u"Found {0} Public Channels".format(len(channels)))
     sleep(1)
 
-    groups = slack.conversations_list(types="private_channel,mpim")['channels']
+    data = slack.conversations_list(types="private_channel,mpim")
+    groups.extend(data['channels'])
+    while data['response_metadata']['next_cursor']:
+        data = slack.conversations_list(types="private_channel,mpim", cursor = data['response_metadata']['next_cursor'])
+        groups.extend(data['channels'])
+        sleep(1)
+        
     print(u"Found {0} Private Channels or Group DMs".format(len(groups)))
     sleep(1)
 
-    dms = slack.conversations_list(types="im")['channels']
+    data = slack.conversations_list(types="im")
+    dms.extend(data['channels'])
+    while data['response_metadata']['next_cursor']:
+        data = slack.conversations_list(types="im", cursor = data['response_metadata']['next_cursor'])
+        dms.extend(data['channels'])
+        sleep(1)
+
     print(u"Found {0} 1:1 DM conversations\n".format(len(dms)))
     sleep(1)
 
