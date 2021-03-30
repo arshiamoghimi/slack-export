@@ -1,5 +1,5 @@
 from slacker import Slacker
-from slack import WebClient
+from slack_sdk import WebClient
 import json
 import argparse
 import os
@@ -9,6 +9,10 @@ import copy
 from datetime import datetime
 from pick import pick
 from time import sleep
+import glob
+import http
+import urllib
+import sys
 
 # fetches the complete message history for a channel/group/im
 #
@@ -186,13 +190,30 @@ def fetchDirectMessages(dms):
         return
 
     for dm in dms:
-        name = userNamesById.get(dm['user'], dm['user'] + " (name unknown)")
-        print(u"Fetching 1:1 DMs with {0}".format(name))
-        dmId = dm['id']
-        mkdir(dmId)
-        messages = getHistory(slack, dm['id'])
-        #messages = slack.conversations_history(channel=dm['id'])
-        parseMessages( dmId, messages, "im" )
+        end = 0
+        fails = 0
+        while end == 0:
+            try:
+                name = userNamesById.get(dm['user'], dm['user'] + " (name unknown)")
+                print(u"Fetching 1:1 DMs with {0}".format(name))
+                dmId = dm['id']
+                mkdir(dmId)
+                messages = getHistory(slack, dm['id'])
+                for message in messages:
+                    if 'thread_ts' in message:
+                        replies = slack.conversations_replies(channel=dm['id'], ts=message['thread_ts'])['messages']
+                        replies.sort(key = lambda replies: replies['ts'])
+                        message['replies'] = replies[1:]
+                        sleep(1)
+                #messages = slack.conversations_history(channel=dm['id'])
+                parseMessages( dmId, messages, "im" )
+                end = 1
+            except urllib.error.URLError:
+                fails += 1
+                if (fails == 6):
+                    sys.exit("too many failed attempts. Maybe check internet connection.")
+                print("Retrying...")
+                sleep(fails ** fails)
 
 def promptForGroups(groups):
     groupNames = [group['name'] for group in groups]
@@ -210,13 +231,31 @@ def fetchGroups(groups):
         return
 
     for group in groups:
-        groupDir = group['name']
-        mkdir(groupDir)
-        messages = []
-        print(u"Fetching history for Private Channel / Group DM: {0}".format(group['name']))
-        messages = getHistory(slack,group['id'])
-        #messages = slack.conversations_history(channel=group['id'])
-        parseMessages( groupDir, messages, 'group' )
+        end = 0
+        fails = 0
+        while end == 0:
+            try:
+                groupDir = group['name']
+                mkdir(groupDir)
+                messages = []
+                print(u"Fetching history for Private Channel / Group DM: {0}".format(group['name']))
+                messages = getHistory(slack,group['id'])
+                for message in messages:
+                    if 'thread_ts' in message:
+                        replies = slack.conversations_replies(channel=group['id'], ts=message['thread_ts'])['messages'][1:]
+                        replies.sort(key = lambda replies: replies['ts'])
+                        message['replies'] = replies[1:]
+                        sleep(1)
+                
+                #messages = slack.conversations_history(channel=group['id'])
+                parseMessages( groupDir, messages, 'group' )
+                end = 1
+            except urllib.error.URLError:
+                fails += 1
+                if (fails == 6):
+                    sys.exit("too many failed attempts. Maybe check internet connection.")
+                print("Retrying...")
+                sleep(fails ** fails)
 
 # fetch all users for the channel and return a map userId -> userName
 def getUserMap():
@@ -252,15 +291,15 @@ def bootstrapKeyValues():
     print(u"Found {0} Users".format(len(users)))
     sleep(1)
     
-    data = slack.conversations_list(types="public_channel")
-    channels.extend(data['channels'])
-    while data['response_metadata']['next_cursor']:
-        data = slack.conversations_list(types="public_channel", cursor = data['response_metadata']['next_cursor'])
-        channels.extend(data['channels'])
-        sleep(1)
+    # data = slack.conversations_list(types="public_channel")
+    # channels.extend(data['channels'])
+    # while data['response_metadata']['next_cursor']:
+    #     data = slack.conversations_list(types="public_channel", cursor = data['response_metadata']['next_cursor'])
+    #     channels.extend(data['channels'])
+    #     sleep(1)
 
-    print(u"Found {0} Public Channels".format(len(channels)))
-    sleep(1)
+    # print(u"Found {0} Public Channels".format(len(channels)))
+    # sleep(1)
 
     data = slack.conversations_list(types="private_channel,mpim")
     groups.extend(data['channels'])
@@ -312,6 +351,54 @@ def dumpDummyChannel():
     writeMessageFile(outFileName, [])
 
 def finalize():
+    users = {}
+    with open('users.json') as users_json:
+        data = json.load(users_json)
+        for user in data:
+            profile = user['profile']
+            users[user['id']] = profile['real_name']
+
+    dirnames = {}
+    for root, dirs, files in os.walk('./', topdown=False):
+        for name in dirs:
+            user_names = []
+            concatfilename = './' + name + '/concat.json'
+            with open(concatfilename, 'wb') as outfile:
+                for filename in glob.glob('./' + name + '/*.json'):
+                    if filename == concatfilename:
+                        continue
+                    with open(filename, 'rb') as readfile:
+                        shutil.copyfileobj(readfile, outfile)
+            print(f"Parsing {name}...")
+            outputfilename = './' + name + '/out.txt'
+            reader = open(concatfilename, 'r')
+            data = reader.read().replace('][', ',')
+            reader.close()
+            reader = open(concatfilename, 'w')
+            reader.write(data)
+            reader.close()
+            with open(concatfilename) as data_json, open(outputfilename, 'w') as output:
+                data_json = data_json.read()
+                if len(data_json) == 0:
+                    continue
+                data = json.loads(data_json)
+                for message in data:
+                    try:
+                        output.write(datetime.fromtimestamp(int(float(message['ts']))).strftime("%a, %d %b %Y %H:%M:%S") + '   ' + users[message['user']] + ": " + message['text'] + '\n\r')
+                        if 'replies' in message:
+                          for reply in message['replies']:
+                                output.write('        ' + datetime.fromtimestamp(int(float(reply['ts']))).strftime("%a, %d %b %Y %H:%M:%S") + '   ' + users[reply['user']] + ": " + reply['text'] + '\n\r')  
+                        user_names.append(users[message['user']])
+                        user_names = list(dict.fromkeys(user_names))
+                    except KeyError:
+                        output.write(datetime.fromtimestamp(int(float(message['ts']))).strftime("%a, %d %b %Y %H:%M:%S") + '   ' + ": " + message['text'] + '\n\r')
+            if (len(user_names) == 2):
+                dirnames['./' + name] = f'./{user_names[0]}-{user_names[1]}'
+                print(name + '     ' + user_names[0] + user_names[1])
+    print("Done!")
+    for key in dirnames:
+        print(key + '     ' + dirnames[key])
+        os.rename(key, dirnames[key])
     os.chdir('..')
     if zipName:
         shutil.make_archive(zipName, 'zip', outputDirectory, None)
@@ -371,12 +458,23 @@ if __name__ == "__main__":
     testAuth = doTestAuth()
     tokenOwnerId = testAuth['user_id']
 
-    bootstrapKeyValues()
+    end = 0
+    fails = 0
+    while end == 0:
+        try:
+            bootstrapKeyValues()
+            end = 1
+        except http.client.IncompleteRead:
+            fails += 1
+            if (fails == 6):
+                sys.exit("too many failed attempts. Maybe check internet connection.")
+            sleep(fails ** fails)
+
 
     dryRun = args.dryRun
     zipName = args.zip
 
-    outputDirectory = "{0}-slack_export".format(datetime.today().strftime("%Y%m%d-%H%M%S"))
+    outputDirectory = "{0}-slack_export".format(args.token)
     mkdir(outputDirectory)
     os.chdir(outputDirectory)
 
@@ -406,8 +504,8 @@ if __name__ == "__main__":
         fetchPublicChannels(selectedChannels)
 
     if len(selectedGroups) > 0:
-        if len(selectedChannels) == 0:
-            dumpDummyChannel()
+        # if len(selectedChannels) == 0:
+        #     dumpDummyChannel()
         fetchGroups(selectedGroups)
 
     if len(selectedDms) > 0:
