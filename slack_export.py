@@ -135,13 +135,30 @@ def fetchPublicChannels(channels):
         return
 
     for channel in channels:
-        channelDir = channel['name']#.encode('utf-8')
-        print(u"Fetching history for Public Channel: {0}".format(channelDir))
-        channelDir = channel['name']#.encode('utf-8')
-        mkdir( channelDir )
-        messages = getHistory(slack, channel['id'])
-        #messages = slack.conversations_history(channel=channel['id'])
-        parseMessages( channelDir, messages, 'channel')
+        end = 0
+        fails = 0
+        while end == 0:
+            try:
+                channelDir = channel['name']#.encode('utf-8')
+                print(u"Fetching history for Public Channel: {0}".format(channelDir))
+                channelDir = channel['name']#.encode('utf-8')
+                mkdir( channelDir )
+                messages = getHistory(slack, channel['id'])
+                for message in messages:
+                    if 'thread_ts' in message:
+                        replies = slack.conversations_replies(channel=channel['id'], ts=message['thread_ts'])['messages']
+                        replies.sort(key = lambda replies: replies['ts'])
+                        message['replies'] = replies[1:]
+                        sleep(1)
+                #messages = slack.conversations_history(channel=channel['id'])
+                parseMessages( channelDir, messages, 'channel')
+                end = 1
+            except urllib.error.URLError:
+                fails += 1
+                if (fails == 6):
+                    sys.exit("too many failed attempts. Maybe check internet connection.")
+                print("Retrying...")
+                sleep(fails ** fails)
 
 # write channels.json file
 def dumpChannelFile():
@@ -273,7 +290,7 @@ def dumpUserFile():
 # get basic info about the slack channel to ensure the authentication token works
 def doTestAuth():
     testAuth = slacker_slack.auth.test().body
-    if testAuth['ok'] == "true":
+    if testAuth['ok'] == True:
         teamName = testAuth['team']
         currentUser = testAuth['user']
         print(u"Successfully authenticated for team {0} and user {1} ".format(teamName, currentUser))
@@ -294,15 +311,15 @@ def bootstrapKeyValues():
     print(u"Found {0} Users".format(len(users)))
     sleep(1)
     
-    # data = slack.conversations_list(types="public_channel")
-    # channels.extend(data['channels'])
-    # while data['response_metadata']['next_cursor']:
-    #     data = slack.conversations_list(types="public_channel", cursor = data['response_metadata']['next_cursor'])
-    #     channels.extend(data['channels'])
-    #     sleep(1)
+    data = slack.conversations_list(types="public_channel")
+    channels.extend(data['channels'])
+    while data['response_metadata']['next_cursor']:
+        data = slack.conversations_list(types="public_channel", cursor = data['response_metadata']['next_cursor'])
+        channels.extend(data['channels'])
+        sleep(1)
 
-    # print(u"Found {0} Public Channels".format(len(channels)))
-    # sleep(1)
+    print(u"Found {0} Public Channels".format(len(channels)))
+    sleep(1)
 
     data = slack.conversations_list(types="private_channel,mpim")
     groups.extend(data['channels'])
@@ -507,8 +524,8 @@ if __name__ == "__main__":
         fetchPublicChannels(selectedChannels)
 
     if len(selectedGroups) > 0:
-        # if len(selectedChannels) == 0:
-        #     dumpDummyChannel()
+        if len(selectedChannels) == 0:
+            dumpDummyChannel()
         fetchGroups(selectedGroups)
 
     if len(selectedDms) > 0:
