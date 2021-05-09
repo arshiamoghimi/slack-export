@@ -162,13 +162,13 @@ def dumpChannelFile():
 
     #We will be overwriting this file on each run.
     with open('channels.json', 'w') as outFile:
-        json.dump( channels , outFile, indent=4)
+        json.dump( channels , outFile, indent=4, ensure_ascii=False)
     with open('groups.json', 'w') as outFile:
-        json.dump( private , outFile, indent=4)
+        json.dump( private , outFile, indent=4, ensure_ascii=False)
     with open('mpims.json', 'w') as outFile:
-        json.dump( mpim , outFile, indent=4)
+        json.dump( mpim , outFile, indent=4, ensure_ascii=False)
     with open('dms.json', 'w') as outFile:
-        json.dump( dms , outFile, indent=4)
+        json.dump( dms , outFile, indent=4, ensure_ascii=False)
 
 def filterDirectMessagesByUserNameOrId(dms, userNamesOrIds):
     userIds = [userIdsByName.get(userNameOrId, userNameOrId) for userNameOrId in userNamesOrIds]
@@ -268,15 +268,18 @@ def getUserMap():
 def dumpUserFile():
     #write to user file, any existing file needs to be overwritten.
     with open( "users.json", 'w') as userFile:
-        json.dump( users, userFile, indent=4 )
+        json.dump( users, userFile, indent=4 , ensure_ascii=False)
 
 # get basic info about the slack channel to ensure the authentication token works
 def doTestAuth():
     testAuth = slacker_slack.auth.test().body
-    teamName = testAuth['team']
-    currentUser = testAuth['user']
-    print(u"Successfully authenticated for team {0} and user {1} ".format(teamName, currentUser))
-    return testAuth
+    if testAuth['ok'] == "true":
+        teamName = testAuth['team']
+        currentUser = testAuth['user']
+        print(u"Successfully authenticated for team {0} and user {1} ".format(teamName, currentUser))
+        return testAuth
+    else:
+        exit(testAuth['error'])
 
 # Since Slacker does not Cache.. populate some reused lists
 def bootstrapKeyValues():
@@ -396,9 +399,9 @@ def finalize():
                 dirnames['./' + name] = f'./{user_names[0]}-{user_names[1]}'
                 print(name + '     ' + user_names[0] + user_names[1])
     print("Done!")
-    for key in dirnames:
-        print(key + '     ' + dirnames[key])
-        os.rename(key, dirnames[key])
+    # for key in dirnames:
+    #     print(key + '     ' + dirnames[key])
+    #     os.rename(key, dirnames[key])
     os.chdir('..')
     if zipName:
         shutil.make_archive(zipName, 'zip', outputDirectory, None)

@@ -1,4 +1,4 @@
-# Slack Exporter (UTF-8 Version)
+# Slack Exporter
 A python slack exporter
 
 - This is offered free of charge! 
