@@ -13,8 +13,8 @@ A python slack exporter
 # Export Private Channels and Group DMs and 1:1 DMs
 python slack_export.py --token xoxs-123... --groups --directMessages
 
-# Export only the "my_private_channel" Private Channel
-python slack_export.py --token xoxs-123... --groups my_private_channel
+# Export "my_private_channel1" and "my_private_channel2" Private Channel
+python slack_export.py --token xoxs-123... --groups my_private_channel1 my_private_channel2
 
 # Export the Private Channels and Group DMs you select when prompted
 python slack_export.py --token xoxs-123... --groups --prompt
