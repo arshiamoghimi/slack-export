@@ -1,4 +1,3 @@
-from slacker import Slacker
 from slack_sdk import WebClient
 import json
 import argparse
@@ -13,6 +12,36 @@ import glob
 import http
 import urllib
 import sys
+import emoji
+
+
+chat_place_holder = """<li class="chat-block border border-primary rounded shadow-sm p-3 mb-5 bg-white">           
+                        <div class="chat-text"> chattext <div class="chat-avatar">
+                            </div></div>
+                            <div class="border-top pt-2 mt-3">
+                            <span class="chat-name font-weight-light text-black-50 me-3"> chatsender </span>
+                            |
+                            <span class="chat-hour font-weight-light text-black-50 ms-3"> chattime </span>
+                        </div>
+                    </li>
+                    """
+
+thread_place_holder = """<li class="thread-chat chat-block border border-light rounded shadow-sm p-3 mb-3 bg-white">                    
+                            <div class="chat-text"> chattext <div class="chat-avatar">
+                            </div></div>
+                              <div class="border-top pt-2 mt-3">
+                              <span class="chat-name font-weight-light text-black-50 me-3"> chatsender </span>
+                              |
+                              <span class="chat-hour font-weight-light text-black-50 ms-3"> chattime </span>
+                            </div>
+                        </li>
+"""
+
+thread_start = """<ul class="thread-chat-listborder border border-light rounded p-3 mb-5 ms-5 bg-light">
+"""
+
+thread_end = """</ul>
+"""
 
 # fetches the complete message history for a channel/group/im
 #
@@ -22,25 +51,27 @@ import sys
 # slack.im
 #
 # channelId is the id of the channel/group/im you want to download history for.
-def getHistory(client, channelId, pageSize = 100):
+def getHistory(client, channelId, pageSize = 500):
     messages = []
     lastTimestamp = None
 
-    while(True):
-        response = slack.conversations_history(
+    response = slack.conversations_history(
             channel = channelId,
             latest    = lastTimestamp,
             oldest    = 0,
-            count     = pageSize
+            limit     = pageSize
         )
-
+    messages = response['messages']
+    while response['has_more'] == True:
+        response = slack.conversations_history(
+            cursor    = response['response_metadata']['next_cursor'],
+            channel   = channelId,
+            latest    = lastTimestamp,
+            oldest    = 0,
+            limit     = pageSize
+        )
         messages.extend(response['messages'])
-
-        if (response['has_more'] == True):
-            lastTimestamp = messages[-1]['ts'] # -1 means last element in a list
-            sleep(1) # Respect the Slack API rate limit
-        else:
-            break
+        sleep(1)
 
     messages.sort(key = lambda message: message['ts'])
 
@@ -137,20 +168,27 @@ def fetchPublicChannels(channels):
     for channel in channels:
         end = 0
         fails = 0
+        counter = 0
+        history_flag = False
+        channelDir = channel['name']#.encode('utf-8')
+        print(u"Fetching history for Public Channel: {0}".format(channelDir))
+        channelDir = channel['name']#.encode('utf-8')
         while end == 0:
             try:
-                channelDir = channel['name']#.encode('utf-8')
-                print(u"Fetching history for Public Channel: {0}".format(channelDir))
-                channelDir = channel['name']#.encode('utf-8')
-                mkdir( channelDir )
-                messages = getHistory(slack, channel['id'])
-                for message in messages:
-                    if 'thread_ts' in message:
-                        replies = slack.conversations_replies(channel=channel['id'], ts=message['thread_ts'])['messages']
+                if history_flag == False:
+                    mkdir( channelDir )
+                    messages = getHistory(slack, channel['id'])
+                print("Fetching threads")
+                print("Checking " + str(len(messages)) + " messages!")
+                while counter < len(messages):
+                    if 'thread_ts' in messages[counter]:
+                        replies = getThread(channel['id'], messages[counter]['thread_ts'])
                         replies.sort(key = lambda replies: replies['ts'])
-                        message['replies'] = replies[1:]
-                        sleep(1)
-                #messages = slack.conversations_history(channel=channel['id'])
+                        messages[counter]['replies'] = replies[1:]
+                        sleep(0.5)
+                    counter += 1
+                    if counter % 200 == 0:
+                        print("Checked 200 messages. Only " + str(len(messages) - counter) + " messages left!")
                 parseMessages( channelDir, messages, 'channel')
                 end = 1
             except urllib.error.URLError:
@@ -209,20 +247,28 @@ def fetchDirectMessages(dms):
     for dm in dms:
         end = 0
         fails = 0
+        name = userNamesById.get(dm['user'], dm['user'] + " (name unknown)")
+        counter = 0
+        history_flag = False
+        dmId = dm['id']
+        print(u"Fetching 1:1 DMs with {0}".format(name))
         while end == 0:
             try:
-                name = userNamesById.get(dm['user'], dm['user'] + " (name unknown)")
-                print(u"Fetching 1:1 DMs with {0}".format(name))
-                dmId = dm['id']
-                mkdir(dmId)
-                messages = getHistory(slack, dm['id'])
-                for message in messages:
-                    if 'thread_ts' in message:
-                        replies = slack.conversations_replies(channel=dm['id'], ts=message['thread_ts'])['messages']
+                if history_flag == False:
+                    mkdir(dmId)
+                    messages = getHistory(slack, dm['id'])
+                    history_flag = True
+                print("Fetching threads")
+                print("Checking " + str(len(messages)) + " messages!")
+                while counter < len(messages):
+                    if 'thread_ts' in messages[counter]:
+                        replies = getThread(dm['id'], messages[counter]['thread_ts'])
                         replies.sort(key = lambda replies: replies['ts'])
-                        message['replies'] = replies[1:]
+                        messages[counter]['replies'] = replies[1:]
                         sleep(1)
-                #messages = slack.conversations_history(channel=dm['id'])
+                    counter += 1
+                    if counter % 200 == 0:
+                        print("Checked 200 messages. Only " + str(len(messages) - counter) + " messages left!")
                 parseMessages( dmId, messages, "im" )
                 end = 1
             except urllib.error.URLError:
@@ -237,6 +283,32 @@ def promptForGroups(groups):
     selectedGroups = pick(groupNames, 'Select the Private Channels and Group DMs you want to export:', multi_select=True)
     return [groups[index] for groupName, index in selectedGroups]
 
+def getThread(channelId, ts, pageSize = 500):
+    messages = []
+    lastTimestamp = None
+    response = slack.conversations_replies(
+            channel   = channelId,
+            ts        = ts,
+            latest    = lastTimestamp,
+            oldest    = 0,
+            limit     = pageSize
+        )
+    messages = response['messages']
+    while response['has_more'] == True:
+        response = slack.conversations_replies(
+            cursor    = response['response_metadata']['next_cursor'],
+            channel   = channelId,
+            ts        = ts,
+            latest    = lastTimestamp,
+            oldest    = 0,
+            limit     = pageSize
+        )
+        messages.extend(response['messages'])
+        sleep(1)
+    messages.sort(key = lambda message: message['ts'])
+
+    return messages
+
 # fetch and write history for specific private channel
 # also known as groups in the slack API.
 def fetchGroups(groups):
@@ -250,19 +322,28 @@ def fetchGroups(groups):
     for group in groups:
         end = 0
         fails = 0
+        history_flag = False
+        counter = 0
+        messages = []
+        groupDir = group['name']
+        print(u"Fetching history for Private Channel / Group DM: {0}".format(group['name']))
         while end == 0:
             try:
-                groupDir = group['name']
-                mkdir(groupDir)
-                messages = []
-                print(u"Fetching history for Private Channel / Group DM: {0}".format(group['name']))
-                messages = getHistory(slack,group['id'])
-                for message in messages:
-                    if 'thread_ts' in message:
-                        replies = slack.conversations_replies(channel=group['id'], ts=message['thread_ts'])['messages'][1:]
+                if (history_flag == False):
+                    mkdir(groupDir)
+                    messages = getHistory(slack,group['id'])
+                    history_flag = True
+                print("Fetching threads")
+                print("Checking " + str(len(messages)) + " messages!")
+                while counter < len(messages):
+                    if 'thread_ts' in messages[counter]:
+                        replies = getThread(group['id'], messages[counter]['thread_ts'])
                         replies.sort(key = lambda replies: replies['ts'])
-                        message['replies'] = replies[1:]
+                        messages[counter]['replies'] = replies[1:]
                         sleep(1)
+                    counter += 1
+                    if counter % 200 == 0:
+                        print("Checked 200 messages. Only " + str(len(messages) - counter) + " messages left!")
                 
                 #messages = slack.conversations_history(channel=group['id'])
                 parseMessages( groupDir, messages, 'group' )
@@ -289,16 +370,13 @@ def dumpUserFile():
 
 # get basic info about the slack channel to ensure the authentication token works
 def doTestAuth():
-    testAuth = slacker_slack.auth.test().body
+    testAuth = slack.api_test()
     if testAuth['ok'] == True:
-        teamName = testAuth['team']
-        currentUser = testAuth['user']
-        print(u"Successfully authenticated for team {0} and user {1} ".format(teamName, currentUser))
+        print("Successfully authenticated.")
         return testAuth
     else:
         exit(testAuth['error'])
 
-# Since Slacker does not Cache.. populate some reused lists
 def bootstrapKeyValues():
     global users, channels, groups, dms
     data = slack.users_list()
@@ -371,32 +449,45 @@ def dumpDummyChannel():
     writeMessageFile(outFileName, [])
 
 def finalize():
+    global chat_place_holder
+    global thread_place_holder
+    global thread_start
+    chatplace = chat_place_holder
+    threadplace = thread_place_holder
+    threadstart = thread_start
+    chats = ""
     users = {}
-    with open('users.json') as users_json:
+    with open('../users.json') as users_json:
         data = json.load(users_json)
         for user in data:
             profile = user['profile']
             users[user['id']] = profile['real_name']
 
     dirnames = {}
+    htmlreader = open('../chat_template.html')
+    htmltemplate = htmlreader.read()
+    htmlreader.close()
     for root, dirs, files in os.walk('./', topdown=False):
         for name in dirs:
             user_names = []
             concatfilename = './' + name + '/concat.json'
             with open(concatfilename, 'wb') as outfile:
-                for filename in glob.glob('./' + name + '/*.json'):
+                for filename in sorted(glob.glob('./' + name + '/*.json')):
                     if filename == concatfilename:
                         continue
                     with open(filename, 'rb') as readfile:
                         shutil.copyfileobj(readfile, outfile)
             print(f"Parsing {name}...")
             outputfilename = './' + name + '/out.txt'
+            outputhtmlpath = './' + name + '/out.html'
+            linksfile = './' + name + '/links.txt'
             reader = open(concatfilename, 'r')
             data = reader.read().replace('][', ',')
             reader.close()
             reader = open(concatfilename, 'w')
             reader.write(data)
             reader.close()
+            links = []
             with open(concatfilename) as data_json, open(outputfilename, 'w') as output:
                 data_json = data_json.read()
                 if len(data_json) == 0:
@@ -404,21 +495,66 @@ def finalize():
                 data = json.loads(data_json)
                 for message in data:
                     try:
-                        output.write(datetime.fromtimestamp(int(float(message['ts']))).strftime("%a, %d %b %Y %H:%M:%S") + '   ' + users[message['user']] + ": " + message['text'] + '\n\r')
+                        for file in message['files']:
+                            links.append(file['url_private_download'])
+                    except KeyError:
+                        pass
+                    try:
+                        text = message['text']
+                        try:
+                            for file in message['files']:
+                                text += "\n" + file['url_private_download']
+                        except KeyError:
+                            pass
+                        output.write(datetime.fromtimestamp(int(float(message['ts']))).strftime("%a, %d %b %Y %H:%M:%S") + '   ' + users[message['user']] + ": " + text + '\n\r')
+                        chatplace = chatplace.replace('chattime', datetime.fromtimestamp(int(float(message['ts']))).strftime("%a, %d %b %Y %H:%M:%S")).replace('chattext',  emoji.emojize(text, use_aliases=True)).replace('chatsender', users[message['user']])
+                        chats += chatplace
+                        chatplace = chat_place_holder
                         if 'replies' in message:
-                          for reply in message['replies']:
-                                output.write('        ' + datetime.fromtimestamp(int(float(reply['ts']))).strftime("%a, %d %b %Y %H:%M:%S") + '   ' + users[reply['user']] + ": " + reply['text'] + '\n\r')  
+                            chats += threadstart
+                            for reply in message['replies']:
+                                rep_text = reply['text']
+                                try:
+                                    for file in reply['files']:
+                                        rep_text += "\n" + file['url_private_download']
+                                except KeyError:
+                                    pass
+                                output.write('        ' + datetime.fromtimestamp(int(float(reply['ts']))).strftime("%a, %d %b %Y %H:%M:%S") + '   ' + users[reply['user']] + ": " + rep_text + '\n\r') 
+                                threadplace = threadplace.replace('chattime', datetime.fromtimestamp(int(float(reply['ts']))).strftime("%a, %d %b %Y %H:%M:%S")).replace('chattext', emoji.emojize(rep_text, use_aliases=True)).replace('chatsender', users[reply['user']])
+                                chats += threadplace
+                                threadplace = thread_place_holder
+                            chats += thread_end
                         user_names.append(users[message['user']])
                         user_names = list(dict.fromkeys(user_names))
                     except KeyError:
-                        output.write(datetime.fromtimestamp(int(float(message['ts']))).strftime("%a, %d %b %Y %H:%M:%S") + '   ' + ": " + message['text'] + '\n\r')
+                        output.write(datetime.fromtimestamp(int(float(message['ts']))).strftime("%a, %d %b %Y %H:%M:%S") + '   ' + ": " + text + '\n\r')
+                        chatplace = chatplace.replace('chattime', datetime.fromtimestamp(int(float(message['ts']))).strftime("%a, %d %b %Y %H:%M:%S")).replace('chattext',  emoji.emojize(text, use_aliases=True)).replace('chatsender',  "Unknown Sender")
+                        chats += chatplace
+                        chatplace = chat_place_holder
+                        if 'replies' in message:
+                            chats += threadstart
+                            for reply in message['replies']:
+                                rep_text = reply['text']
+                                try:
+                                    for file in reply['files']:
+                                        rep_text += "\n" + file['url_private_download']
+                                except KeyError:
+                                    pass
+                                output.write('        ' + datetime.fromtimestamp(int(float(reply['ts']))).strftime("%a, %d %b %Y %H:%M:%S") + '   ' + ": " + rep_text + '\n\r') 
+                                threadplace = threadplace.replace('chattime', datetime.fromtimestamp(int(float(reply['ts']))).strftime("%a, %d %b %Y %H:%M:%S")).replace('chattext', emoji.emojize(rep_text, use_aliases=True)).replace('chatsender',  "Unknown Sender")
+                                chats += threadplace
+                                threadplace = thread_place_holder
+                            chats += thread_end
             if (len(user_names) == 2):
                 dirnames['./' + name] = f'./{user_names[0]}-{user_names[1]}'
                 print(name + '     ' + user_names[0] + user_names[1])
+            with open(outputhtmlpath, 'w') as outhtml:
+                outhtml.write(htmltemplate.replace('chatplaceholder', chats).replace("channel_name", name))
+            with open(linksfile, 'w') as lfile:
+                for link in links:
+                    lfile.write(link)
+                    lfile.write('\n')
     print("Done!")
-    # for key in dirnames:
-    #     print(key + '     ' + dirnames[key])
-    #     os.rename(key, dirnames[key])
     os.chdir('..')
     if zipName:
         shutil.make_archive(zipName, 'zip', outputDirectory, None)
@@ -473,34 +609,60 @@ if __name__ == "__main__":
     userNamesById = {}
     userIdsByName = {}
 
-    slacker_slack = Slacker(args.token)
     slack = WebClient(token=args.token)
     testAuth = doTestAuth()
     tokenOwnerId = testAuth['user_id']
 
-    end = 0
-    fails = 0
-    while end == 0:
-        try:
-            bootstrapKeyValues()
-            end = 1
-        except http.client.IncompleteRead:
-            fails += 1
-            if (fails == 6):
-                sys.exit("too many failed attempts. Maybe check internet connection.")
-            sleep(fails ** fails)
-
+    try:
+        u = open("users.json")
+        c = open("channels.json")
+        d = open("dms.json")
+        g = open("groups.json")
+        m = open("mpims.json")
+        u_data = json.loads(u.read())
+        c_data = json.loads(c.read())
+        d_data = json.loads(d.read())
+        g_data = json.loads(g.read())
+        m_data = json.loads(m.read())
+        for user in u_data:
+            users.append(user)
+        for ch in c_data:
+            channels.append(ch)
+        for dm in d_data:
+            dms.append(dm)
+        for gp in g_data:
+            groups.append(gp)
+        for mp in m_data:
+            groups.append(user)
+        u.close()
+        c.close()
+        d.close()
+        g.close()
+        m.close()
+    except FileNotFoundError:
+        print("Fetching data from server.")
+        end = 0
+        fails = 0
+        while end == 0:
+            try:
+                bootstrapKeyValues()
+                end = 1
+            except http.client.IncompleteRead:
+                fails += 1
+                print("Retrying...")
+                if (fails == 6):
+                    sys.exit("Too many failed attempts. Maybe check internet connection.")
+                sleep(fails ** fails)
+        dumpUserFile()
+        dumpChannelFile()
+    
 
     dryRun = args.dryRun
     zipName = args.zip
 
-    outputDirectory = "{0}-slack_export".format(args.token)
+    outputDirectory = "{date}-{token}-slack_export".format(token = args.token, date = datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
     mkdir(outputDirectory)
     os.chdir(outputDirectory)
-
-    if not dryRun:
-        dumpUserFile()
-        dumpChannelFile()
 
     selectedChannels = selectConversations(
         channels,
