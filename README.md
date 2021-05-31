@@ -5,7 +5,7 @@ A python slack exporter
 1. Go to https://api.slack.com/apps
 2. Create an app
 3. Under 'Features' go to 'OAuth & Permissions'
-4. Add 'channels:history', 'channels:read', 'groups:history', 'groups:read', 'im:history', 'im:read', 'mpim:history', 'mpim:read', and 'users:read' to 'User Token Scopes'
+4. Add 'channels:history', 'channels:read', 'groups:history', 'groups:read', 'im:history', 'im:read', 'mpim:history', 'mpim:read', 'files:read', and 'users:read' to 'User Token Scopes'
 5. Install the app to workspace
 6. Copy the 'User OAuth Token'
 
